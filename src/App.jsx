@@ -566,8 +566,9 @@ function App() {
   }
 
   function orderForParticipant(purchase, person, previous = null, deliveryShareOverride) {
-    const reached = safeNumber(purchase.target) > 0 && safeNumber(purchase.collected) >= safeNumber(purchase.target)
-    const unitPrice = reached ? safeNumber(purchase.wholesale) : safeNumber(purchase.retail)
+    const pricing = getPurchasePricing(purchase)
+    const reached = pricing.reached
+    const unitPrice = pricing.unitPrice
     const subtotal = person.quantity * unitPrice
     const deliveryShare = deliveryShareOverride ?? calculatePurchaseDeliveryShare(purchase, subtotal)
     const step = purchase.isDiscountFixed ? 2 : 1
@@ -701,7 +702,7 @@ function App() {
 
   function startCheckout(purchase, sourcePage = activePage) {
     if (user?.role !== 'participant' || !purchase || !purchase.isDiscountFixed
-      || safeNumber(purchase.collected) < safeNumber(purchase.target)) return
+      || !getPurchasePricing(purchase).reached) return
     const order = orders.find((item) => item.purchaseId === purchase.id && item.userId === user.id)
     if (!order || progressStep(order) !== 2 || order.paymentStatus === 'Оплачено' || order.cancelled) return
     setCheckoutDraft({

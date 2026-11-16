@@ -31,12 +31,13 @@ export default function CostCalculatorCard({
 
   const Icon = PRODUCT_ICONS[purchase.icon] || Package
   const target = safeNumber(purchase.target)
-  const collected = safeNumber(purchase.collected)
-  const isGoalReached = target > 0 && collected >= target
-  const isDiscountFixed = Boolean(purchase.isDiscountFixed ?? purchase.discountFixed)
-  const unitPrice = safeNumber(isGoalReached ? purchase.wholesale : purchase.retail)
-  const subtotal = safeNumber(quantity) * unitPrice
   const pricing = getPurchasePricing(purchase)
+  const collected = safeNumber(purchase.collected)
+  const targetReached = pricing.targetReached
+  const isGoalReached = pricing.reached
+  const isDiscountFixed = Boolean(purchase.isDiscountFixed ?? purchase.discountFixed)
+  const unitPrice = pricing.unitPrice
+  const subtotal = safeNumber(quantity) * unitPrice
   const deliveryShare = calculatePurchaseDeliveryShare(purchase, subtotal)
   const deliveryBase = pricing.deliveryBase
   const savings = calculateSavings(purchase.retail, purchase.wholesale, quantity)
@@ -45,7 +46,7 @@ export default function CostCalculatorCard({
   const neededQuantity = safeNumber(purchase.retail) > 0
     ? Math.max(1, Math.min(MAX_PURCHASE_QUANTITY, Math.ceil(Math.max(0, target - Math.max(0, collected - ownCollected)) / safeNumber(purchase.retail))))
     : 1
-  const goalIsClose = !isGoalReached && target - Math.max(0, collected - ownCollected) <= safeNumber(purchase.retail) * 5
+  const goalIsClose = !targetReached && target - Math.max(0, collected - ownCollected) <= safeNumber(purchase.retail) * 5
   const membershipLocked = isCancelled || paymentClosed || hasPaid || isDiscountFixed
 
   async function handlePrimaryAction() {
@@ -81,16 +82,17 @@ export default function CostCalculatorCard({
   return (
     <aside className="panel estimate-panel">
       <div className="estimate-head"><span className="eyebrow"><span className="eyebrow-dot" /> ВАШЕ ЗАМОВЛЕННЯ</span><h3>Мій кошторис</h3></div>
-      <div className="estimate-product"><div className={`estimate-thumb art-${purchase.art || 'coffee'}`}><Icon size={22} /></div><div><strong className="break-words" title={purchase.name}>{purchase.name}</strong><span>{isGoalReached ? 'Гуртова пропозиція активна' : 'Ваш кошторис'}</span></div></div>
+      <div className="estimate-product"><div className={`estimate-thumb art-${purchase.art || 'coffee'}`}><Icon size={22} /></div><div><strong className="break-words" title={purchase.name}>{purchase.name}</strong><span>{isGoalReached ? 'Гуртова пропозиція активна' : targetReached ? 'Суму порогу покрито · потрібен ще 1 учасник' : 'Ваш кошторис'}</span></div></div>
       <div className="quantity-selection-block pb-4 mb-4 border-b border-slate-200/80 dark:border-slate-800">
         <div className="quantity-control"><div><span>Кількість одиниць</span><small>Від 1 до 100 шт.</small></div><div className="quantity-stepper"><button type="button" aria-label="Зменшити кількість" disabled={membershipLocked || isSubmitting || quantity <= 1} onClick={() => setQuantity((value) => Math.max(1, value - 1))}><Minus size={18} /></button><input className="quantity-value" type="text" inputMode="numeric" pattern="[0-9]*" maxLength={3} aria-label="Кількість товару" value={quantity} disabled={membershipLocked || isSubmitting} onChange={(event) => updateQuantity(event.target.value)} /><button type="button" aria-label="Збільшити кількість" disabled={membershipLocked || isSubmitting || quantity >= MAX_PURCHASE_QUANTITY} onClick={() => setQuantity((value) => Math.min(MAX_PURCHASE_QUANTITY, value + 1))}><Plus size={18} /></button></div></div>
         <div className="quantity-shortcuts" aria-label="Швидка зміна кількості">{[1, 3, 5].map((amount) => <button type="button" key={amount} disabled={membershipLocked || isSubmitting || quantity >= MAX_PURCHASE_QUANTITY} onClick={() => setQuantity((value) => normalizePurchaseQuantity(value + amount))}>+{amount}</button>)}{goalIsClose && <button className="goal-shortcut" type="button" disabled={membershipLocked || isSubmitting} onClick={() => setQuantity(neededQuantity)}>Добрати до 100 % знижки</button>}</div>
       </div>
       <div className="estimate-lines"><div><span>Товари · {quantity} шт.</span><strong>{formatMoney(subtotal)}</strong></div><div><span>Ціна за одиницю</span><strong className={isGoalReached ? 'success-text' : ''}>{formatMoney(unitPrice)} · {isGoalReached ? 'гуртова' : 'роздрібна'}</strong></div><div><span>Частка доставки</span><strong>{formatMoney(deliveryShare)}</strong></div></div>
       <p className="delivery-formula">Доставка {formatMoney(purchase.delivery)} × {formatMoney(subtotal)} / {formatMoney(deliveryBase)}</p>
-      {!isGoalReached && <div className="estimate-unlock"><span>Ще до порогу</span><strong>{formatMoney(remaining)}</strong></div>}
+      {!targetReached && <div className="estimate-unlock"><span>Ще до порогу</span><strong>{formatMoney(remaining)}</strong></div>}
       <div className="estimate-total"><span>До сплати</span><strong>{formatMoney(subtotal + deliveryShare)}</strong></div>
       {isGoalReached && <div className="savings-message"><BadgePercent className="w-4 h-4 text-[#007A53] dark:text-emerald-400 shrink-0" /><span>Ваша економія <strong>{formatMoney(savings)}</strong> завдяки гуртовій ціні</span></div>}
+      {targetReached && !isGoalReached && <p className="estimate-footnote discount-pending-note">Суму порогу покрито, але для активації гуртової ціни потрібен щонайменше ще 1 учасник (мінімум 2 учасники у спільній закупівлі).</p>}
       {isCancelled ? (
         <div className="estimate-cancelled-note">Час збору вичерпано, поріг не досягнуто</div>
       ) : paymentClosed && !hasPaid ? (
@@ -108,7 +110,7 @@ export default function CostCalculatorCard({
         </>
       )}
       {isGoalReached && !isDiscountFixed && hasJoined && !hasPaid && <p className="estimate-footnote discount-pending-note">Поріг 100 % досягнуто! Організатор має зафіксувати знижку, щоб відкрити оплату.</p>}
-      {!isCancelled && !isGoalReached && <p className="estimate-footnote"><ShieldCheck size={18} /> Оплата відкриється після досягнення порогу та фіксації знижки організатором.</p>}
+      {!isCancelled && !targetReached && <p className="estimate-footnote"><ShieldCheck size={18} /> Оплата відкриється після досягнення порогу та фіксації знижки організатором.</p>}
       {isGoalReached && !isDiscountFixed && !hasJoined && <p className="estimate-footnote discount-pending-note">Поріг досягнуто. Після приєднання очікуйте фіксації знижки організатором.</p>}
       {isGoalReached && isDiscountFixed && hasJoined && !hasPaid && !paymentClosed && <p className="estimate-footnote"><ShieldCheck size={18} /> Знижку зафіксовано — можна сплатити гуртову частку.</p>}
       <ConfirmModal open={confirmLeave} title="Вийти зі збору?" message="Ваше замовлення буде видалено із закупівлі. Ви зможете приєднатися знову, доки організатор не зафіксував знижку." confirmLabel="Так, вийти зі збору" cancelLabel="Залишитися" danger busy={isSubmitting} onClose={() => setConfirmLeave(false)} onConfirm={handleLeave} />

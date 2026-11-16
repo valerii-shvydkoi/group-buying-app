@@ -10,6 +10,17 @@ const MAX_ORDER_SUBTOTAL = MAX_UNIT_PRICE * 1000
 const MAX_COLLECTION = MAX_ORDER_SUBTOTAL * 5000
 const boundedNumber = (value, max) => Math.min(max, Math.max(0, safeNumber(value)))
 
+export function getUniqueParticipantCount(participants) {
+  if (!Array.isArray(participants)) return 0
+  const identities = new Set()
+  for (const participant of participants) {
+    const identity = participant?.userId ?? participant?.email ?? participant?.id
+    if (identity == null || String(identity).trim() === '') continue
+    identities.add(String(identity).trim().toLocaleLowerCase('uk-UA'))
+  }
+  return identities.size
+}
+
 export function calculateDeliveryShare(deliveryTotal, subtotal, threshold, collected = 0) {
   const safeThreshold = boundedNumber(threshold, MAX_COLLECTION)
   const baseAmount = Math.max(boundedNumber(collected, MAX_COLLECTION), safeThreshold)
@@ -23,9 +34,11 @@ export function getPurchasePricing(purchase = {}) {
   const retailPrice = boundedNumber(purchase.retail, MAX_UNIT_PRICE)
   const wholesalePrice = boundedNumber(purchase.wholesale, MAX_UNIT_PRICE)
   const threshold = boundedNumber(purchase.target, MAX_UNIT_PRICE)
-  const reached = threshold > 0 && boundedNumber(purchase.collected, MAX_COLLECTION) >= threshold
-  const unitPrice = reached ? wholesalePrice : retailPrice
+  const targetReached = threshold > 0 && boundedNumber(purchase.collected, MAX_COLLECTION) >= threshold
   const participants = Array.isArray(purchase.participants) ? purchase.participants.slice(0, 5000) : []
+  const participantCount = getUniqueParticipantCount(participants)
+  const reached = targetReached && participantCount >= 2
+  const unitPrice = reached ? wholesalePrice : retailPrice
   const totalCollected = participants.reduce((total, participant) => {
     const quantity = Math.max(0, Math.min(100, Math.floor(Number(participant.quantity) || 0)))
     return Math.min(MAX_COLLECTION, total + quantity * unitPrice)
@@ -37,7 +50,7 @@ export function getPurchasePricing(purchase = {}) {
     : threshold
   const deliveryBase = Math.max(totalCollected, thresholdAtCurrentPrice)
 
-  return { reached, unitPrice, totalCollected, thresholdAtCurrentPrice, deliveryBase }
+  return { reached, targetReached, participantCount, unitPrice, totalCollected, thresholdAtCurrentPrice, deliveryBase }
 }
 
 export function calculatePurchaseDeliveryShare(purchase = {}, userSubtotal = 0) {

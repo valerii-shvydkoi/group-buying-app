@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { ArrowRight, CheckCircle2, ChevronDown, ChevronUp, ShieldCheck, Truck, Users, XCircle, Clock3, PackageCheck } from 'lucide-react'
 import { formatMoney } from '../lib/money.js'
-import { calculatePurchaseDeliveryShares, percentOf, safeNumber } from '../utils/calculations.js'
+import { calculatePurchaseDeliveryShares, getPurchasePricing, percentOf, safeNumber } from '../utils/calculations.js'
 import { formatCountdown, purchaseRemainingSeconds } from '../utils/purchaseTimer.js'
 import { getPurchaseTransition, haveAllParticipantsPaid } from '../utils/purchaseWorkflow.js'
 import { getFilterCounts, getOrganizerPurchaseCategory } from '../utils/statusFilters.js'
@@ -33,7 +33,7 @@ export default function ManagePurchaseView({ items = [], orders = [], ownerId = 
   const purchaseFilterTabs = PURCHASE_FILTERS.map((filter) => ({ ...filter, count: purchaseCounts[filter.id] }))
   const activePurchaseCount = purchaseCounts.active
   const actionPurchaseCount = purchaseCounts.action
-  const discountReadyCount = ownedItems.filter((item) => item.status === 'Збір учасників' && !(item.isDiscountFixed ?? item.discountFixed) && safeNumber(item.target) > 0 && safeNumber(item.collected) >= safeNumber(item.target)).length
+  const discountReadyCount = ownedItems.filter((item) => item.status === 'Збір учасників' && !(item.isDiscountFixed ?? item.discountFixed) && getPurchasePricing(item).reached).length
   if (!purchase) return <div className="page-content manage-content">
     <PageIntro label="Мої закупівлі" description="Керуйте власними зборами та відстежуйте їхній статус." />
     <section className="organizer-kpi-grid" aria-label="Показники закупівель">
@@ -46,7 +46,9 @@ export default function ManagePurchaseView({ items = [], orders = [], ownerId = 
   </div>
 
   const percentage = percentOf(purchase.collected, purchase.target)
-  const reached = safeNumber(purchase.target) > 0 && safeNumber(purchase.collected) >= safeNumber(purchase.target)
+  const pricing = getPurchasePricing(purchase)
+  const targetReached = pricing.targetReached
+  const reached = pricing.reached
   const secondsLeft = purchaseRemainingSeconds(purchase, now)
   const completed = purchase.status === 'Завершено'
   const cancelled = purchase.status === 'Скасовано' || (!reached && secondsLeft === 0)
@@ -55,6 +57,7 @@ export default function ManagePurchaseView({ items = [], orders = [], ownerId = 
   const currentStep = MANAGE_STATUS_STEPS[purchase.status]
     || Math.max(1, Math.min(MANAGE_STATUS_LABELS.length, safeNumber(purchase.currentStep) || safeNumber(purchase.statusIndex) + 1))
   const participants = purchase.participants ?? []
+  const needsMoreParticipants = targetReached && !reached
   const hasPaidOrders = orders.some((order) => order.purchaseId === purchase.id
     && (order.paymentStatus === 'Оплачено' || order.status === 'Отримано'))
     || participants.some((person) => ['Оплачено', 'Отримано'].includes(person.payment))
@@ -66,7 +69,7 @@ export default function ManagePurchaseView({ items = [], orders = [], ownerId = 
     userId: ownerId || purchase.organizerId,
     purchase,
   }) === 'Оплата'
-  const participantSubtotal = (person) => Math.max(1, safeNumber(person.quantity)) * safeNumber(reached ? purchase.wholesale : purchase.retail)
+  const participantSubtotal = (person) => Math.max(1, safeNumber(person.quantity)) * pricing.unitPrice
   const deliveryShares = new Map(calculatePurchaseDeliveryShares(purchase, participants.map((person) => ({ ...person, subtotal: participantSubtotal(person) }))).map(({ userId, deliveryShare }) => [userId, deliveryShare]))
   const participantDelivery = (person) => deliveryShares.get(person.userId) || 0
   const matchingParticipants = participantSearch.trim()
@@ -128,10 +131,10 @@ export default function ManagePurchaseView({ items = [], orders = [], ownerId = 
               <span className="transition-all duration-500 ease-out" style={{ width: `${percentage}%` }} />
             </div>
             <p className={`collection-message ${cancelled ? 'error-text' : reached ? 'success-text' : ''}`}>
-              {completed ? <><CheckCircle2 size={18} /> Закупівлю успішно закрито.</> : cancelled ? 'Час збору вичерпано, поріг не досягнуто' : reached ? <><CheckCircle2 size={18} /> Поріг 100 % досягнуто! Очікуємо підтвердження гуртової ціни організатором.</> : <>Нові учасники можуть приєднатись ще на <strong>{formatMoney(purchase.target - purchase.collected).trim()}</strong>.</>}
+              {completed ? <><CheckCircle2 size={18} /> Закупівлю успішно закрито.</> : cancelled ? 'Час збору вичерпано, гуртова знижка не активована' : reached ? <><CheckCircle2 size={18} /> Поріг 100 % досягнуто! Очікуємо підтвердження гуртової ціни організатором.</> : needsMoreParticipants ? 'Суму порогу покрито, але для активації гуртової ціни потрібен щонайменше ще 1 учасник (мінімум 2 учасники у спільній закупівлі).' : <>Нові учасники можуть приєднатись ще на <strong>{formatMoney(purchase.target - purchase.collected).trim()}</strong>.</>}
             </p>
             {!completed && !cancelled && <div className="manage-actions">
-              {purchase.status === 'Збір учасників' && <button className="primary-button lock-discount-button" disabled={!canFixDiscount || Boolean(busyAction)} onClick={() => runAction('discount', () => onFixDiscount(purchase.id))}>
+              {purchase.status === 'Збір учасників' && <button className="primary-button lock-discount-button" title={needsMoreParticipants ? 'Для активації гуртової ціни потрібні щонайменше 2 унікальні учасники.' : undefined} aria-describedby={needsMoreParticipants ? 'discount-participant-requirement' : undefined} disabled={!canFixDiscount || Boolean(busyAction)} onClick={() => runAction('discount', () => onFixDiscount(purchase.id))}>
                 {busyAction === 'discount' ? 'Фіксуємо знижку…' : discountFixed ? <><CheckCircle2 size={18} /> Знижку зафіксовано</> : <>Зафіксувати знижку та перейти до оплати <ArrowRight size={18} /></>}
               </button>}
               {purchase.status === 'Оплата' && <button className="primary-button lock-discount-button" disabled={!allParticipantsPaid || Boolean(busyAction)} onClick={() => runAction('batch', () => onUpdatePurchaseStatus(purchase.id, 'Оформлення'))}>
@@ -139,7 +142,8 @@ export default function ManagePurchaseView({ items = [], orders = [], ownerId = 
               </button>}
               {['Оформлення', 'Доставка', 'Точка видачі'].includes(purchase.status) && <div className="manage-logistics-note"><Truck size={18} /> {purchase.status === 'Оформлення' ? 'Партію підготовлено — незабаром її прийме кур’єр.' : formatCourierStatusHistoryMessage(purchase.status, purchase.courierName, purchase.pickupAddress)}</div>}
             </div>}
-            <p className="manage-progress-footnote"><ShieldCheck size={18} /> {purchase.status === 'Оплата' ? 'Партію можна оформити після оплати часток усіма учасниками.' : 'Після досягнення порогу організатор фіксує гуртову знижку.'}</p>
+            {purchase.status === 'Збір учасників' && needsMoreParticipants && <p id="discount-participant-requirement" className="estimate-footnote discount-pending-note">Суму порогу покрито, але для активації гуртової ціни потрібен щонайменше ще 1 учасник (мінімум 2 учасники у спільній закупівлі).</p>}
+            <p className="manage-progress-footnote"><ShieldCheck size={18} /> {purchase.status === 'Оплата' ? 'Партію можна оформити після оплати часток усіма учасниками.' : needsMoreParticipants ? 'Після покриття суми порогу гуртова ціна активується лише за участі щонайменше двох покупців.' : 'Після досягнення порогу й мінімуму учасників організатор фіксує гуртову знижку.'}</p>
           </section>
 
           <section className="panel participant-table-panel">
@@ -179,7 +183,7 @@ export default function ManagePurchaseView({ items = [], orders = [], ownerId = 
                       </tr>
                     })}
                   </tbody>
-                  <tfoot><tr><td>Разом</td><td>{participants.reduce((total, person) => total + safeNumber(person.quantity), 0)}</td><td>{formatMoney(totalParticipantAmount)}</td><td>{formatMoney(totalParticipantDelivery)}</td><td>{completed ? 'Отримано' : reached ? 'Поріг 100%' : `${percentage}%`}</td></tr></tfoot>
+                  <tfoot><tr><td>Разом</td><td>{participants.reduce((total, person) => total + safeNumber(person.quantity), 0)}</td><td>{formatMoney(totalParticipantAmount)}</td><td>{formatMoney(totalParticipantDelivery)}</td><td>{completed ? 'Отримано' : reached ? 'Поріг 100%' : targetReached ? 'Очікуємо учасника' : `${percentage}%`}</td></tr></tfoot>
                 </table>
               </div>
               {matchingParticipants.length > 4 && !participantSearch.trim() && <button className="participant-list-toggle" type="button" onClick={toggleParticipantList}>
@@ -194,7 +198,7 @@ export default function ManagePurchaseView({ items = [], orders = [], ownerId = 
           <section className="panel conditions-panel">
             <div className="section-heading"><div><span className="eyebrow"><span className="eyebrow-dot" /> УМОВИ</span><h3>Умови закупівлі</h3></div></div>
             <ConditionRow label="Роздрібна ціна" value={formatMoney(purchase.retail)} />
-            <ConditionRow label="Гуртова ціна" value={formatMoney(purchase.wholesale)} success />
+            <ConditionRow label="Гуртова ціна" value={formatMoney(purchase.wholesale)} success={reached} />
             <ConditionRow label="Мінімальний поріг" value={formatMoney(purchase.target)} />
             <ConditionRow label="Доставка" value={formatMoney(purchase.delivery)} />
             {purchase.pickupAddress && <div className="manage-pickup-condition"><span className="manage-pickup-label">Точка видачі</span><span className="manage-pickup-address">{purchase.pickupAddress}</span></div>}

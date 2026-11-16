@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { ArrowRight, Check, Clock3, EyeOff, Package, Search, Users, X } from 'lucide-react'
 import { CATEGORIES } from '../data/initialData.js'
 import { formatMoney } from '../lib/money.js'
-import { percentOf, safeNumber } from '../utils/calculations.js'
+import { getPurchasePricing, percentOf, safeNumber } from '../utils/calculations.js'
 import { formatCountdown, purchaseRemainingSeconds } from '../utils/purchaseTimer.js'
 import { PRODUCT_ICONS } from '../utils/productVisuals.js'
 import { EmptyState, Notice, PageIntro } from './Shared.jsx'
@@ -17,7 +17,11 @@ const SORT_OPTIONS = [
 ]
 
 function isReached(purchase) {
-  return safeNumber(purchase.target) > 0 && safeNumber(purchase.collected) >= safeNumber(purchase.target)
+  return getPurchasePricing(purchase).reached
+}
+
+function isTargetReached(purchase) {
+  return getPurchasePricing(purchase).targetReached
 }
 
 function isClosed(purchase, now) {
@@ -42,7 +46,7 @@ export default function CatalogView({ purchases = [], now, userRole = 'participa
     return matchesCategory && searchable.includes(query.toLocaleLowerCase('uk-UA').trim())
   }), [purchases, category, query])
   const openCollections = matchingPurchases.filter((purchase) => !isClosed(purchase, now)).length
-  const fundedCollections = matchingPurchases.filter((purchase) => isReached(purchase)).length
+  const fundedCollections = matchingPurchases.filter((purchase) => isTargetReached(purchase)).length
   const visiblePurchases = useMemo(() => {
     const source = hideClosed ? matchingPurchases.filter((purchase) => !isClosed(purchase, now)) : [...matchingPurchases]
     if (sortBy === 'goal') source.sort((a, b) => percentOf(b.collected, b.target) - percentOf(a.collected, a.target))
@@ -93,6 +97,8 @@ function PurchaseCard({ purchase, now, userRole = 'participant', isOwnPurchase =
   const Icon = PRODUCT_ICONS[purchase.icon] || Package
   const percentage = percentOf(purchase.collected, purchase.target)
   const reached = isReached(purchase)
+  const targetReached = isTargetReached(purchase)
+  const participantCount = getPurchasePricing(purchase).participantCount
   const discount = discountPercent(purchase)
   const secondsLeft = purchaseRemainingSeconds(purchase, now)
   const cancelled = purchase.status === 'Скасовано' || (!reached && secondsLeft === 0)
@@ -100,7 +106,7 @@ function PurchaseCard({ purchase, now, userRole = 'participant', isOwnPurchase =
   return (
     <button type="button" className="purchase-card transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md" onClick={onClick} aria-label={`Відкрити закупівлю ${purchase.name}`}>
       <div className={`product-art art-${purchase.art || 'coffee'}`}><span className="art-glow" /><span className="art-category">{purchase.category}</span><div className="product-art-placeholder"><div className="product-art-icon"><Icon size={36} strokeWidth={1.45} /></div><span className="art-pack-label">{purchase.name.split(',')[1]?.trim() || 'Набір'}</span></div></div>
-      <div className="purchase-card-body"><div className="purchase-title-row"><h3 className="break-words whitespace-pre-line leading-relaxed text-left" title={purchase.name}>{purchase.name}</h3>{reached && <span className="threshold-badge">Поріг досягнуто</span>}<span className="participants-count" title="Учасники закупівлі"><Users size={18} /> {Array.isArray(purchase.participants) ? purchase.participants.length : 0}</span></div><p className="organizer-name text-left">Організатор: <strong className="break-words leading-snug" title={purchase.organizerName || purchase.organizer}>{purchase.organizerName || purchase.organizer}</strong></p>{purchase.supplier && <p className="organizer-name text-left">Магазин: <strong className="break-words leading-snug" title={purchase.supplier}>{purchase.supplier}</strong></p>}<div className="progress-meta"><span>{formatMoney(purchase.collected)} <span className="muted">/ {formatMoney(purchase.target)}</span></span><strong>{percentage}%</strong></div><div className={`progress-track ${reached ? 'reached' : ''}`} role="progressbar" aria-label={`Збір для закупівлі ${purchase.name}`} aria-valuenow={percentage} aria-valuemin="0" aria-valuemax="100"><span className="transition-all duration-500 ease-out" style={{ width: `${percentage}%` }} /></div><div className="price-row text-left"><span className="text-left">Ціна: роздрібна <i>→</i> гуртова</span><strong>{formatMoney(purchase.retail)} <i>→</i> <b>{formatMoney(purchase.wholesale)}</b>{discount > 0 && <span className="discount-badge">−{discount}%</span>}</strong></div><div className={`timer-row ${urgent ? 'urgent critical' : ''} ${reached ? 'reached' : ''} ${cancelled ? 'cancelled' : ''}`}><Clock3 size={18} /><span>{cancelled ? 'Збір скасовано · час вичерпано' : reached ? 'Збір завершено · 100 %' : `Залишилось ${formatCountdown(secondsLeft)}${urgent ? ' · менше години' : ''}`}</span>{reached && <Check className="discount-confirm-icon" size={18} />}</div><p className="product-description line-clamp-2 break-words text-left">{purchase.detail || purchase.description}</p></div>
+      <div className="purchase-card-body"><div className="purchase-title-row"><h3 className="break-words whitespace-pre-line leading-relaxed text-left" title={purchase.name}>{purchase.name}</h3>{reached && <span className="threshold-badge">Поріг досягнуто</span>}{targetReached && !reached && <span className="threshold-badge">Потрібен ще 1 учасник</span>}<span className="participants-count" title="Учасники закупівлі"><Users size={18} /> {participantCount}</span></div><p className="organizer-name text-left">Організатор: <strong className="break-words leading-snug" title={purchase.organizerName || purchase.organizer}>{purchase.organizerName || purchase.organizer}</strong></p>{purchase.supplier && <p className="organizer-name text-left">Магазин: <strong className="break-words leading-snug" title={purchase.supplier}>{purchase.supplier}</strong></p>}<div className="progress-meta"><span>{formatMoney(purchase.collected)} <span className="muted">/ {formatMoney(purchase.target)}</span></span><strong>{percentage}%</strong></div><div className={`progress-track ${reached ? 'reached' : ''}`} role="progressbar" aria-label={`Збір для закупівлі ${purchase.name}`} aria-valuenow={percentage} aria-valuemin="0" aria-valuemax="100"><span className="transition-all duration-500 ease-out" style={{ width: `${percentage}%` }} /></div><div className="price-row text-left"><span className="text-left">Ціна: роздрібна <i>→</i> гуртова</span><strong>{formatMoney(purchase.retail)} <i>→</i> <b>{formatMoney(purchase.wholesale)}</b>{discount > 0 && <span className="discount-badge">−{discount}%</span>}</strong></div><div className={`timer-row ${urgent ? 'urgent critical' : ''} ${reached ? 'reached' : ''} ${cancelled ? 'cancelled' : ''}`}><Clock3 size={18} /><span>{cancelled ? 'Збір скасовано · час вичерпано' : reached ? 'Гуртова ціна активована' : targetReached ? 'Потрібен ще 1 учасник для гуртової ціни' : `Залишилось ${formatCountdown(secondsLeft)}${urgent ? ' · менше години' : ''}`}</span>{reached && <Check className="discount-confirm-icon" size={18} />}</div><p className="product-description line-clamp-2 break-words text-left">{purchase.detail || purchase.description}</p></div>
       <div className="card-action"><span>{isOwnPurchase ? 'Перейти до керування' : userRole === 'organizer' ? 'Перегляд закупівлі' : 'Деталі закупівлі'}</span><ArrowRight size={18} /></div>
     </button>
   )

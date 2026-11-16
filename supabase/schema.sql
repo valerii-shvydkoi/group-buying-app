@@ -453,6 +453,7 @@ declare
   delivery_value numeric;
   threshold_value numeric;
   collected_value numeric;
+  participant_count integer;
   priced_collected_value numeric;
   threshold_at_current_price numeric;
   delivery_base_value numeric;
@@ -552,6 +553,9 @@ begin
   threshold_value := coalesce(nullif(purchase_data ->> 'target', '')::numeric, 0);
   collected_value := coalesce(nullif(purchase_data ->> 'collected', '')::numeric, 0);
   participants_data := coalesce(purchase_data -> 'participants', '[]'::jsonb);
+  select count(distinct nullif(person ->> 'userId', ''))::integer
+  into participant_count
+  from jsonb_array_elements(participants_data) as persons(person);
 
   if action_name = 'cancel_purchase' then
     if actor_role <> 'Організатор' then raise exception 'Скасувати закупівлю може лише організатор.' using errcode = '42501'; end if;
@@ -579,7 +583,7 @@ begin
     if purchase_data ->> 'status' <> 'Збір учасників' or coalesce((purchase_data ->> 'isDiscountFixed')::boolean, false) then
       raise exception 'Збір уже закритий для нових часток.' using errcode = '55000';
     end if;
-    if threshold_value <= 0 or (collected_value < threshold_value
+    if threshold_value <= 0 or (not (collected_value >= threshold_value and participant_count >= 2)
       and coalesce(nullif(purchase_data ->> 'expiresAt', '')::numeric, nullif(purchase_data ->> 'deadlineAt', '')::numeric, 0) <= extract(epoch from now_value) * 1000) then
       raise exception 'Час збору вичерпано.' using errcode = '55000';
     end if;
@@ -603,7 +607,10 @@ begin
     select coalesce(sum(coalesce(nullif(person ->> 'amount', '')::numeric,
       coalesce(nullif(person ->> 'quantity', '')::numeric, 0) * retail_value)), 0)
     into collected_value from jsonb_array_elements(participants_data) as persons(person);
-    reached_value := collected_value >= threshold_value;
+    select count(distinct nullif(person ->> 'userId', ''))::integer
+    into participant_count
+    from jsonb_array_elements(participants_data) as persons(person);
+    reached_value := collected_value >= threshold_value and participant_count >= 2;
     unit_price_value := case when reached_value then wholesale_value else retail_value end;
     select coalesce(sum(coalesce(nullif(person ->> 'quantity', '')::numeric, 0) * unit_price_value), 0)
     into priced_collected_value from jsonb_array_elements(participants_data) as persons(person);
@@ -706,7 +713,10 @@ begin
     select coalesce(sum(coalesce(nullif(person ->> 'amount', '')::numeric,
       coalesce(nullif(person ->> 'quantity', '')::numeric, 0) * retail_value)), 0)
     into collected_value from jsonb_array_elements(participants_data) as persons(person);
-    reached_value := collected_value >= threshold_value;
+    select count(distinct nullif(person ->> 'userId', ''))::integer
+    into participant_count
+    from jsonb_array_elements(participants_data) as persons(person);
+    reached_value := collected_value >= threshold_value and participant_count >= 2;
     unit_price_value := case when reached_value then wholesale_value else retail_value end;
     select coalesce(sum(coalesce(nullif(person ->> 'quantity', '')::numeric, 0) * unit_price_value), 0)
     into priced_collected_value from jsonb_array_elements(participants_data) as persons(person);
@@ -736,9 +746,12 @@ begin
     if actor_role <> 'Організатор' or (select organizer_id from public.gb_purchases where id = purchase_id_value) <> actor_id then
       raise exception 'Керувати цією закупівлею може лише її організатор.' using errcode = '42501';
     end if;
-    if purchase_data ->> 'status' <> 'Збір учасників' or collected_value < threshold_value
+    select count(distinct nullif(person ->> 'userId', ''))::integer
+    into participant_count
+    from jsonb_array_elements(participants_data) as persons(person);
+    if purchase_data ->> 'status' <> 'Збір учасників' or collected_value < threshold_value or participant_count < 2
       or coalesce((purchase_data ->> 'isDiscountFixed')::boolean, false) then
-      raise exception 'Поріг ще не досягнуто або знижку вже зафіксовано.' using errcode = '55000';
+      raise exception 'Для фіксації гуртової знижки потрібні поріг і щонайменше 2 унікальні учасники.' using errcode = '55000';
     end if;
     select coalesce(sum(coalesce(nullif(person ->> 'quantity', '')::numeric, 0) * wholesale_value), 0)
     into priced_collected_value from jsonb_array_elements(participants_data) as persons(person);
@@ -767,7 +780,9 @@ begin
   if action_name = 'pay_order' then
     if actor_role <> 'Учасник' then raise exception 'Оплатити частку може лише учасник.' using errcode = '42501'; end if;
     select data into order_data from public.gb_orders where purchase_id = purchase_id_value and user_id = actor_id for update;
-    if order_data is null or order_data ->> 'status' <> 'Оплата' or order_data ->> 'paymentStatus' = 'Оплачено' then
+    if order_data is null or order_data ->> 'status' <> 'Оплата' or order_data ->> 'paymentStatus' = 'Оплачено'
+      or not coalesce((purchase_data ->> 'isDiscountFixed')::boolean, false)
+      or collected_value < threshold_value or participant_count < 2 then
       raise exception 'Замовлення ще не готове до оплати або вже сплачено.' using errcode = '55000';
     end if;
     history_data := coalesce(order_data -> 'history', '[]'::jsonb) || jsonb_build_array(jsonb_build_object('status', 'Оплата', 'message', 'Учасник ' || actor_name || ' сплатив частку. Кошти утримуються на гарантійному рахунку до отримання товару.', 'time', now_text));
@@ -784,7 +799,8 @@ begin
     if actor_role <> 'Організатор' or (select organizer_id from public.gb_purchases where id = purchase_id_value) <> actor_id then
       raise exception 'Керувати цією закупівлею може лише її організатор.' using errcode = '42501';
     end if;
-    if purchase_data ->> 'status' <> 'Оплата' or not coalesce((purchase_data ->> 'isDiscountFixed')::boolean, false) then
+    if purchase_data ->> 'status' <> 'Оплата' or not coalesce((purchase_data ->> 'isDiscountFixed')::boolean, false)
+      or collected_value < threshold_value or participant_count < 2 then
       raise exception 'Спочатку організатор має зафіксувати знижку.' using errcode = '55000';
     end if;
     select not exists (
@@ -856,7 +872,7 @@ begin
 
   if action_name = 'expire_purchase' then
     if purchase_data ->> 'status' = 'Скасовано' or purchase_data ->> 'status' = 'Завершено'
-      or threshold_value <= collected_value
+      or (threshold_value <= collected_value and participant_count >= 2)
       or coalesce(nullif(purchase_data ->> 'expiresAt', '')::numeric, nullif(purchase_data ->> 'deadlineAt', '')::numeric, 0) > extract(epoch from now_value) * 1000 then
       return jsonb_build_object('ok', true, 'expired', false);
     end if;

@@ -1,4 +1,4 @@
-import { safeNumber } from './calculations.js'
+import { getPurchasePricing } from './calculations.js'
 import { haveAllParticipantsPaid } from './purchaseWorkflow.js'
 
 function canonicalStatus(status = '') {
@@ -18,10 +18,9 @@ function canonicalStatus(status = '') {
 export function getOrganizerPurchaseCategory(purchase, orders = []) {
   const status = canonicalStatus(purchase?.status)
   if (['Завершено', 'Отримано', 'Скасовано'].includes(status)) return 'completed'
-  const thresholdReached = safeNumber(purchase?.target) > 0
-    && safeNumber(purchase?.collected) >= safeNumber(purchase?.target)
+  const discountEligible = getPurchasePricing(purchase).reached
   const discountFixed = Boolean(purchase?.isDiscountFixed ?? purchase?.discountFixed)
-  if (status === 'Збір учасників' && thresholdReached && !discountFixed) return 'action'
+  if (status === 'Збір учасників' && discountEligible && !discountFixed) return 'action'
   if (status === 'Оплата' && haveAllParticipantsPaid(purchase, orders)) return 'action'
   return 'active'
 }

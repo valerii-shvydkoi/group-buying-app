@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { ArrowLeft, CheckCircle2, ChevronDown, ChevronUp, Clock3, MapPin, Package, ShieldCheck, Truck, Users } from 'lucide-react'
 import { formatMoney } from '../lib/money.js'
-import { calculatePurchaseDeliveryShares, percentOf, safeNumber } from '../utils/calculations.js'
+import { calculatePurchaseDeliveryShares, getPurchasePricing, percentOf, safeNumber } from '../utils/calculations.js'
 import { formatCountdownHours, purchaseRemainingSeconds } from '../utils/purchaseTimer.js'
 import { PRODUCT_ICONS } from '../utils/productVisuals.js'
 import { EmptyState, PageIntro } from './Shared.jsx'
@@ -32,7 +32,9 @@ export default function PurchaseDetailView({
   const percentage = percentOf(purchase.collected, purchase.target)
   const target = safeNumber(purchase.target)
   const collected = safeNumber(purchase.collected)
-  const reached = target > 0 && collected >= target
+  const pricing = getPurchasePricing(purchase)
+  const targetReached = pricing.targetReached
+  const reached = pricing.reached
   const discountFixed = Boolean(purchase.isDiscountFixed ?? purchase.discountFixed)
   const remaining = Math.max(0, target - collected)
   const secondsLeft = purchaseRemainingSeconds(purchase, now)
@@ -44,7 +46,7 @@ export default function PurchaseDetailView({
   const participants = Array.isArray(purchase.participants) ? purchase.participants : []
   const participant = participants.find((person) => person.userId === userId || person.userId === userEmail)
   const participantCount = participants.length
-  const purchaseUnitPrice = safeNumber(reached ? purchase.wholesale : purchase.retail)
+  const purchaseUnitPrice = pricing.unitPrice
   const participantDeliveryShares = new Map(calculatePurchaseDeliveryShares(purchase, participants.map((person) => ({
     ...person,
     subtotal: Math.max(1, safeNumber(person.quantity)) * purchaseUnitPrice,
@@ -76,8 +78,8 @@ export default function PurchaseDetailView({
           <section className="panel collection-panel">
             <div className="collection-heading"><div><span className="eyebrow"><span className="eyebrow-dot" /> ПРОГРЕС ЗБОРУ</span><h3><span className="collection-amount">Зібрано {formatMoney(purchase.collected)}</span><span className="collection-target">з {formatMoney(purchase.target)}</span></h3></div><strong className="collection-percent">{percentage}<small>%</small></strong></div>
             <div className={`large-progress ${reached ? 'reached' : ''}`} role="progressbar" aria-label="Прогрес збору" aria-valuenow={percentage} aria-valuemin="0" aria-valuemax="100"><span className="transition-all duration-500 ease-out" style={{ width: `${percentage}%` }} /></div>
-            {cancelled ? <p className="collection-message error-text">Час збору вичерпано, поріг не досягнуто</p> : reached ? <p className="collection-message success-text"><CheckCircle2 size={18} /> {discountFixed ? 'Гуртову ціну зафіксовано. Можна перейти до оплати.' : 'Поріг 100 % досягнуто! Очікуємо підтвердження гуртової ціни організатором.'}</p> : <p className="collection-message">До гуртової ціни залишилося <strong>{formatMoney(remaining).trim()}</strong>. Збір автоматично оновлюється для всіх учасників.</p>}
-            <div className={`purchase-timer-meta ${urgent ? 'urgent critical' : ''} ${cancelled ? 'cancelled' : ''}`}><span><Clock3 size={18} /> {cancelled ? 'Збір скасовано' : reached ? 'Збір завершено · 100 %' : `Залишилось ${formatCountdownHours(secondsLeft)}`}</span><span>{cancelled ? 'Участь і оплата недоступні' : reached ? 'Таймер зупинено' : urgent ? 'Менше години — дійте швидше' : 'Активний збір за таймером'}</span></div>
+            {cancelled ? <p className="collection-message error-text">Час збору вичерпано, гуртова знижка не активована</p> : reached ? <p className="collection-message success-text"><CheckCircle2 size={18} /> {discountFixed ? 'Гуртову ціну зафіксовано. Можна перейти до оплати.' : 'Поріг 100 % досягнуто! Очікуємо підтвердження гуртової ціни організатором.'}</p> : targetReached ? <p className="collection-message discount-pending-note">Суму порогу покрито, але для активації гуртової ціни потрібен щонайменше ще 1 учасник (мінімум 2 учасники у спільній закупівлі).</p> : <p className="collection-message">До гуртової ціни залишилося <strong>{formatMoney(remaining).trim()}</strong>. Збір автоматично оновлюється для всіх учасників.</p>}
+            <div className={`purchase-timer-meta ${urgent ? 'urgent critical' : ''} ${cancelled ? 'cancelled' : ''}`}><span><Clock3 size={18} /> {cancelled ? 'Збір скасовано' : reached ? 'Гуртова ціна активована · 100 %' : targetReached ? 'Поріг покрито · потрібен ще 1 учасник' : `Залишилось ${formatCountdownHours(secondsLeft)}`}</span><span>{cancelled ? 'Участь і оплата недоступні' : reached ? 'Таймер зупинено' : urgent ? 'Менше години — дійте швидше' : 'Активний збір за таймером'}</span></div>
           </section>
 
           <section className="panel participants-panel">

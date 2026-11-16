@@ -1,3 +1,5 @@
+import { getUniqueParticipantCount } from './calculations.js'
+
 const COLLECTION_STATUS = 'Збір учасників'
 
 function finiteNumber(value) {
@@ -41,6 +43,9 @@ export function getPurchaseTransition({
 
   const collected = finiteNumber(purchase.collected)
   const target = finiteNumber(purchase.target)
+  const hasMinimumParticipants = getUniqueParticipantCount(purchase.participants) >= 2
+  const targetReached = target > 0 && collected >= target
+  const discountEligible = targetReached && hasMinimumParticipants
   const discountFixed = Boolean(purchase.isDiscountFixed ?? purchase.discountFixed)
   const orderStep = order
     ? finiteNumber(order.currentStep ?? (order.statusIndex == null ? 1 : finiteNumber(order.statusIndex) + 1))
@@ -49,7 +54,7 @@ export function getPurchaseTransition({
   switch (action) {
     case 'join_purchase':
       return role === 'participant' && purchase.status === COLLECTION_STATUS && !discountFixed
-        && target > 0 && (collected >= target || finiteNumber(purchase.expiresAt ?? purchase.deadlineAt) > now)
+        && target > 0 && (discountEligible || finiteNumber(purchase.expiresAt ?? purchase.deadlineAt) > now)
         ? COLLECTION_STATUS : null
     case 'leave_purchase':
       return role === 'participant' && purchase.status === COLLECTION_STATUS && !discountFixed
@@ -58,11 +63,11 @@ export function getPurchaseTransition({
         ? COLLECTION_STATUS : null
     case 'fix_discount':
       return role === 'organizer' && purchase.organizerId === userId
-        && purchase.status === COLLECTION_STATUS && !discountFixed && target > 0 && collected >= target
+        && purchase.status === COLLECTION_STATUS && !discountFixed && discountEligible
         ? 'Оплата' : null
     case 'form_batch':
       return role === 'organizer' && purchase.organizerId === userId
-        && purchase.status === 'Оплата' && discountFixed && allParticipantsPaid
+        && purchase.status === 'Оплата' && discountFixed && discountEligible && allParticipantsPaid
         ? 'Оформлення' : null
     case 'accept_delivery':
       return role === 'courier' && purchase.status === 'Оформлення' && allParticipantsPaid
@@ -81,7 +86,7 @@ export function getPurchaseTransition({
         ? 'Скасовано' : null
     case 'expire_purchase': {
       const deadline = finiteNumber(purchase.expiresAt ?? purchase.deadlineAt)
-      return purchase.status === COLLECTION_STATUS && target > 0 && collected < target
+      return purchase.status === COLLECTION_STATUS && target > 0 && !discountEligible
         && deadline > 0 && deadline <= now ? 'Скасовано' : null
     }
     default:
