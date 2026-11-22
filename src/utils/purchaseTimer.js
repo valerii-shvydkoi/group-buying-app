@@ -1,3 +1,5 @@
+import { getSynchronizedNow } from './serverClock.js'
+
 export const PURCHASE_TIMER_OPTIONS = [
   { label: '30 секунд', seconds: 30 },
   { label: '3 години', seconds: 3 * 60 * 60 },
@@ -18,13 +20,13 @@ export function parseRemainingSeconds(value = '') {
   return Math.max(1, dayValue * 24 * 60 * 60 + hours * 60 * 60 + minutes * 60 + seconds)
 }
 
-export function remainingSeconds(deadlineAt, now = Date.now()) {
+export function remainingSeconds(deadlineAt, now = getSynchronizedNow()) {
   const deadline = Number(deadlineAt)
   if (!Number.isFinite(deadline) || deadline <= 0) return 0
   return Math.max(0, Math.ceil((deadline - now) / 1000))
 }
 
-export function purchaseRemainingSeconds(purchase = {}, now = Date.now()) {
+export function purchaseRemainingSeconds(purchase = {}, now = getSynchronizedNow()) {
   const deadline = purchase.expiresAt ?? purchase.deadlineAt
   if (Number.isFinite(Number(deadline)) && Number(deadline) > 0) {
     return remainingSeconds(deadline, now)

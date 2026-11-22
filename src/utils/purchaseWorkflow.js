@@ -1,4 +1,5 @@
 import { getUniqueParticipantCount } from './calculations.js'
+import { getSynchronizedNow } from './serverClock.js'
 
 const COLLECTION_STATUS = 'Збір учасників'
 
@@ -37,7 +38,7 @@ export function getPurchaseTransition({
   order = null,
   allParticipantsPaid = false,
   hasPaidOrders = false,
-  now = Date.now(),
+  now = getSynchronizedNow(),
 } = {}) {
   if (!purchase) return null
 

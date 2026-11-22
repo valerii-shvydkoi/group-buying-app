@@ -26,6 +26,7 @@
   --text-secondary: var(--text-soft);
   --muted: #57534e;
   --muted-2: #a8a29e;
+  --tracker-inactive: #57534e;
   --border: #e7e5e4;
   --border-strong: #d6d3d1;
   --input-border: #a8a29e;
@@ -58,6 +59,7 @@
   --text-secondary: var(--text-soft);
   --muted: #a8a29e;
   --muted-2: #78716c;
+  --tracker-inactive: #d6d3d1;
   --border: #292524;
   --border-strong: #44403c;
   --input-border: #57534e;

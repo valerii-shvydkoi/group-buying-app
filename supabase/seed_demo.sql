@@ -5,33 +5,15 @@
 -- All demo accounts use the same password: DemoPass2026!
 begin;
 
+drop table if exists pg_temp.gb_demo_order_seed;
+drop table if exists pg_temp.gb_demo_purchase_seed;
+
 delete from public.gb_orders;
 delete from public.gb_purchases;
 delete from public.gb_courier_payouts;
 delete from public.gb_password_reset_attempts;
 delete from auth.identities;
 delete from auth.users;
-
-create temporary table gb_demo_accounts (
-  id uuid primary key,
-  email text not null unique,
-  first_name text not null,
-  last_name text not null,
-  role_key text not null check (role_key in ('participant', 'organizer', 'courier'))
-) on commit drop;
-
-insert into gb_demo_accounts (id, email, first_name, last_name, role_key) values
-  ('10000000-0000-4000-8000-000000000001', 'organizer@groupbuying.ua', 'Олена', 'Ковальчук', 'organizer'),
-  ('10000000-0000-4000-8000-000000000002', 'participant@groupbuying.ua', 'Максим', 'Бондаренко', 'participant'),
-  ('10000000-0000-4000-8000-000000000003', 'courier@groupbuying.ua', 'Андрій', 'Мельник', 'courier'),
-  ('10000000-0000-4000-8000-000000000004', 'iryna.savchenko@groupbuying.ua', 'Ірина', 'Савченко', 'participant'),
-  ('10000000-0000-4000-8000-000000000005', 'dmytro.tkachenko@groupbuying.ua', 'Дмитро', 'Ткаченко', 'participant'),
-  ('10000000-0000-4000-8000-000000000006', 'nataliia.romanenko@groupbuying.ua', 'Наталія', 'Романенко', 'participant'),
-  ('10000000-0000-4000-8000-000000000007', 'taras.lysenko@groupbuying.ua', 'Тарас', 'Лисенко', 'participant'),
-  ('10000000-0000-4000-8000-000000000008', 'yuliia.moroz@groupbuying.ua', 'Юлія', 'Мороз', 'participant'),
-  ('10000000-0000-4000-8000-000000000009', 'oleh.pavlenko@groupbuying.ua', 'Олег', 'Павленко', 'participant'),
-  ('10000000-0000-4000-8000-000000000010', 'svitlana.kravchenko@groupbuying.ua', 'Світлана', 'Кравченко', 'participant'),
-  ('10000000-0000-4000-8000-000000000011', 'bohdan.shevchuk@groupbuying.ua', 'Богдан', 'Шевчук', 'participant');
 
 -- Direct Auth inserts are available to a Supabase database owner and mark the
 -- demo accounts confirmed. The existing auth trigger creates public.gb_users.
@@ -51,14 +33,38 @@ select
     'role', account.role_key
   ),
   now(), now(), false, false
-from gb_demo_accounts as account;
+from (values
+  ('10000000-0000-4000-8000-000000000001'::uuid, 'organizer@groupbuying.ua', 'Олена', 'Ковальчук', 'organizer'),
+  ('10000000-0000-4000-8000-000000000002'::uuid, 'participant@groupbuying.ua', 'Максим', 'Бондаренко', 'participant'),
+  ('10000000-0000-4000-8000-000000000003'::uuid, 'courier@groupbuying.ua', 'Андрій', 'Мельник', 'courier'),
+  ('10000000-0000-4000-8000-000000000004'::uuid, 'iryna.savchenko@groupbuying.ua', 'Ірина', 'Савченко', 'participant'),
+  ('10000000-0000-4000-8000-000000000005'::uuid, 'dmytro.tkachenko@groupbuying.ua', 'Дмитро', 'Ткаченко', 'participant'),
+  ('10000000-0000-4000-8000-000000000006'::uuid, 'nataliia.romanenko@groupbuying.ua', 'Наталія', 'Романенко', 'participant'),
+  ('10000000-0000-4000-8000-000000000007'::uuid, 'taras.lysenko@groupbuying.ua', 'Тарас', 'Лисенко', 'participant'),
+  ('10000000-0000-4000-8000-000000000008'::uuid, 'yuliia.moroz@groupbuying.ua', 'Юлія', 'Мороз', 'participant'),
+  ('10000000-0000-4000-8000-000000000009'::uuid, 'oleh.pavlenko@groupbuying.ua', 'Олег', 'Павленко', 'participant'),
+  ('10000000-0000-4000-8000-000000000010'::uuid, 'svitlana.kravchenko@groupbuying.ua', 'Світлана', 'Кравченко', 'participant'),
+  ('10000000-0000-4000-8000-000000000011'::uuid, 'bohdan.shevchuk@groupbuying.ua', 'Богдан', 'Шевчук', 'participant')
+) as account(id, email, first_name, last_name, role_key);
 
 insert into auth.identities (id, user_id, identity_data, provider, provider_id, created_at, updated_at)
 select
   gen_random_uuid(), account.id,
   jsonb_build_object('sub', account.id::text, 'email', account.email, 'email_verified', true),
   'email', account.email, now(), now()
-from gb_demo_accounts as account;
+from (values
+  ('10000000-0000-4000-8000-000000000001'::uuid, 'organizer@groupbuying.ua'),
+  ('10000000-0000-4000-8000-000000000002'::uuid, 'participant@groupbuying.ua'),
+  ('10000000-0000-4000-8000-000000000003'::uuid, 'courier@groupbuying.ua'),
+  ('10000000-0000-4000-8000-000000000004'::uuid, 'iryna.savchenko@groupbuying.ua'),
+  ('10000000-0000-4000-8000-000000000005'::uuid, 'dmytro.tkachenko@groupbuying.ua'),
+  ('10000000-0000-4000-8000-000000000006'::uuid, 'nataliia.romanenko@groupbuying.ua'),
+  ('10000000-0000-4000-8000-000000000007'::uuid, 'taras.lysenko@groupbuying.ua'),
+  ('10000000-0000-4000-8000-000000000008'::uuid, 'yuliia.moroz@groupbuying.ua'),
+  ('10000000-0000-4000-8000-000000000009'::uuid, 'oleh.pavlenko@groupbuying.ua'),
+  ('10000000-0000-4000-8000-000000000010'::uuid, 'svitlana.kravchenko@groupbuying.ua'),
+  ('10000000-0000-4000-8000-000000000011'::uuid, 'bohdan.shevchuk@groupbuying.ua')
+) as account(id, email);
 
 create temporary table gb_demo_purchase_seed (
   id text primary key,
@@ -78,7 +84,7 @@ create temporary table gb_demo_purchase_seed (
   fixed boolean not null,
   duration_seconds integer not null default 259200,
   created_at timestamptz not null
-) on commit drop;
+);
 
 insert into gb_demo_purchase_seed values
   ('demo-coffee-lavazza', 'Кава в зернах Lavazza Qualità Oro 1 кг', 'Продукти', 'METRO Cash & Carry', 'Насичена 100% арабіка для домашнього еспресо. До гуртової ціни залишився один внесок.', 680, 490, 5440, 240, 'Київ, вул. Антоновича, 122, вестибюль ЖК «Парк Авеню»', '09:00 – 21:00', 'Збір учасників', 'organizer@groupbuying.ua', null, false, 259200, now() - interval '2 hours'),
@@ -97,7 +103,7 @@ create temporary table gb_demo_order_seed (
   current_step smallint not null check (current_step between 1 and 5),
   payment_status text not null,
   primary key (purchase_id, account_email)
-) on commit drop;
+);
 
 insert into gb_demo_order_seed values
   -- Seven retail units = 4,760 / 5,440; one 680 грн unit brings the lot to 100%.
@@ -212,20 +218,28 @@ join public.gb_users as organizer on organizer.email = purchase.organizer_email
 left join public.gb_users as courier on courier.email = purchase.courier_email
 join participant_payload as payload on payload.id = purchase.id;
 
-with order_totals as (
+with participant_totals as (
   select
     purchase.id,
-    sum(orders.quantity * case when collected.total >= purchase.target then purchase.wholesale else purchase.retail end) as priced_total,
-    collected.total as retail_total,
-    collected.total >= purchase.target as reached
+    coalesce(sum(orders.quantity * purchase.retail), 0) as collected_amount,
+    count(distinct orders.account_email) as participant_count
+  from gb_demo_purchase_seed as purchase
+  left join gb_demo_order_seed as orders on orders.purchase_id = purchase.id
+  group by purchase.id
+), order_totals as (
+  select
+    purchase.id,
+    sum(orders.quantity * case
+      when participants.collected_amount >= purchase.target and participants.participant_count >= 2
+        then purchase.wholesale
+      else purchase.retail
+    end) as priced_total,
+    participants.collected_amount,
+    participants.collected_amount >= purchase.target and participants.participant_count >= 2 as discount_eligible
   from gb_demo_purchase_seed as purchase
   join gb_demo_order_seed as orders on orders.purchase_id = purchase.id
-  join lateral (
-    select sum(assignment.quantity * purchase.retail) as total
-    from gb_demo_order_seed as assignment
-    where assignment.purchase_id = purchase.id
-  ) as collected on true
-  group by purchase.id, collected.total
+  join participant_totals as participants on participants.id = purchase.id
+  group by purchase.id, participants.collected_amount, participants.participant_count, purchase.target
 ), order_values as (
   select
     purchase.id as purchase_id,
@@ -248,11 +262,13 @@ with order_totals as (
     profile.email as participant_email,
     organizer.name as organizer_name,
     courier.name as courier_name,
-    case when totals.reached then purchase.wholesale else purchase.retail end as unit_price,
-    orders.quantity * case when totals.reached then purchase.wholesale else purchase.retail end as subtotal,
+    totals.collected_amount,
+    totals.discount_eligible,
+    case when totals.discount_eligible then purchase.wholesale else purchase.retail end as unit_price,
+    orders.quantity * case when totals.discount_eligible then purchase.wholesale else purchase.retail end as subtotal,
     greatest(
       totals.priced_total,
-      case when totals.reached then purchase.target * purchase.wholesale / purchase.retail else purchase.target end
+      case when totals.discount_eligible then purchase.target * purchase.wholesale / purchase.retail else purchase.target end
     ) as delivery_base,
     case purchase.status when 'Збір учасників' then 1 when 'Оплата' then 2 when 'Оформлення' then 3 else 5 end as purchase_step
   from gb_demo_purchase_seed as purchase
@@ -271,7 +287,7 @@ with order_totals as (
 ), prepared as (
   select allocations.*,
     rounded_delivery + case
-      when correction_rank = 1 and delivery_base > 0 and retail_total >= target
+      when correction_rank = 1 and delivery_base > 0 and discount_eligible
         then delivery - rounded_delivery_total
       else 0
     end as delivery_share,

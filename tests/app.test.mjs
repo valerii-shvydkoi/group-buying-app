@@ -30,7 +30,7 @@ test('пропорційна доставка розподіляється ві�
   assert.equal(calculateDeliveryShare(1000, 7500, 10000, 10000), 750)
 })
 
-test('один учасник, який покрив поріг, сплачує всю доставку за гуртовою ціною', () => {
+test('один учасник не активує гуртову ціну, доки до збору не приєднається ще один', () => {
   const purchase = {
     retail: 1000,
     wholesale: 800,
@@ -40,9 +40,22 @@ test('один учасник, який покрив поріг, сплачує 
     participants: [{ userId: 'user-1', quantity: 10 }],
   }
   const pricing = getPurchasePricing(purchase)
-  assert.equal(pricing.reached, true)
-  assert.equal(pricing.unitPrice, 800)
-  assert.equal(calculatePurchaseDeliveryShare(purchase, 8000), 5000)
+  assert.equal(pricing.reached, false)
+  assert.equal(pricing.unitPrice, 1000)
+  assert.equal(calculatePurchaseDeliveryShare(purchase, 10000), 5000)
+
+  const sharedPurchase = {
+    ...purchase,
+    participants: [{ userId: 'user-1', quantity: 9 }, { userId: 'user-2', quantity: 1 }],
+  }
+  const sharedPricing = getPurchasePricing(sharedPurchase)
+  const shares = calculatePurchaseDeliveryShares(sharedPurchase, sharedPurchase.participants.map((person) => ({
+    ...person,
+    subtotal: person.quantity * sharedPricing.unitPrice,
+  })))
+  assert.equal(sharedPricing.reached, true)
+  assert.equal(sharedPricing.unitPrice, 800)
+  assert.equal(shares.reduce((sum, item) => sum + item.deliveryShare, 0), 5000)
   assert.equal(calculateSavings(1000, 800, 10), 2000)
 })
 
@@ -85,7 +98,7 @@ test('доставка розподіляється без втрат для з�
 test('фільтри закупівель, замовлень і доставок мають взаємовиключні категорії та точні лічильники', () => {
   const purchases = [
     { status: 'collecting', collected: 400, target: 800 },
-    { status: 'Збір учасників', collected: 800, target: 800 },
+    { status: 'Збір учасників', collected: 800, target: 800, participants: [{ userId: 'u1' }, { userId: 'u2' }] },
     { status: 'Скасовано' },
   ]
   const organizerCategories = purchases.map((purchase) => getOrganizerPurchaseCategory(purchase))
@@ -258,12 +271,13 @@ test('історія замовлення прибирає дублікати т
 
 test('гуртова ціна вмикається рівно на порозі, економія рахується за кількістю', () => {
   assert.equal(getPurchasePricing({ retail: 500, wholesale: 400, target: 10000, collected: 9999 }).reached, false)
-  assert.equal(getPurchasePricing({ retail: 500, wholesale: 400, target: 10000, collected: 10000 }).unitPrice, 400)
+  assert.equal(getPurchasePricing({ retail: 500, wholesale: 400, target: 10000, collected: 10000, participants: [{ userId: 'u1' }] }).unitPrice, 500)
+  assert.equal(getPurchasePricing({ retail: 500, wholesale: 400, target: 10000, collected: 10000, participants: [{ userId: 'u1' }, { userId: 'u2' }] }).unitPrice, 400)
   assert.equal(calculateSavings(500, 400, 4), 400)
 })
 
 test('життєвий цикл переходить між етапами тільки з потрібною роллю та умовами', () => {
-  let purchase = { id: 'p1', organizerId: 'org1', status: 'Збір учасників', collected: 10000, target: 10000, isDiscountFixed: false, participants: [] }
+  let purchase = { id: 'p1', organizerId: 'org1', status: 'Збір учасників', collected: 10000, target: 10000, isDiscountFixed: false, participants: [{ userId: 'buyer1' }, { userId: 'buyer2' }] }
   assert.equal(getPurchaseTransition({ action: 'fix_discount', role: 'participant', userId: 'org1', purchase }), null)
   assert.equal(getPurchaseTransition({ action: 'fix_discount', role: 'organizer', userId: 'org2', purchase }), null)
   assert.equal(getPurchaseTransition({ action: 'fix_discount', role: 'organizer', userId: 'org1', purchase: { ...purchase, collected: 9999 } }), null)
@@ -307,7 +321,8 @@ test('партію можна оформити лише коли сплатил�
 test('прострочений збір скасовується, але досягнутий поріг не скасовується', () => {
   const expired = { status: 'Збір учасників', collected: 999, target: 1000, expiresAt: 1000 }
   assert.equal(getPurchaseTransition({ action: 'expire_purchase', purchase: expired, now: 1000 }), 'Скасовано')
-  assert.equal(getPurchaseTransition({ action: 'expire_purchase', purchase: { ...expired, collected: 1000 }, now: 1000 }), null)
+  const eligible = { ...expired, collected: 1000, participants: [{ userId: 'u1' }, { userId: 'u2' }] }
+  assert.equal(getPurchaseTransition({ action: 'expire_purchase', purchase: eligible, now: 1000 }), null)
   assert.equal(getPurchaseTransition({ action: 'expire_purchase', purchase: expired, now: 999 }), null)
   assert.equal(purchaseRemainingSeconds({ expiresAt: 1000 }, 1000), 0)
   assert.deepEqual(PURCHASE_TIMER_OPTIONS.map(({ seconds }) => seconds), [30, 10800, 86400, 259200, 604800, 1209600])
@@ -325,7 +340,7 @@ test('участь дозволена лише покупцю до фіксац�
 })
 
 test('ролі мають окремі дозволи, а назви відображаються однозначно', () => {
-  const purchase = { organizerId: 'org1', status: 'Збір учасників', target: 10, collected: 10 }
+  const purchase = { organizerId: 'org1', status: 'Збір учасників', target: 10, collected: 10, participants: [{ userId: 'u1' }, { userId: 'u2' }] }
   assert.equal(getPurchaseTransition({ action: 'fix_discount', role: 'organizer', userId: 'org1', purchase }), 'Оплата')
   assert.equal(getPurchaseTransition({ action: 'fix_discount', role: 'participant', userId: 'org1', purchase }), null)
   assert.equal(getPurchaseTransition({ action: 'cancel_purchase', role: 'organizer', userId: 'other', purchase }), null)

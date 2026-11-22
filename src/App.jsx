@@ -14,6 +14,8 @@ import { isValidEmail, isValidPassword, parseNonNegativeInteger, validateOrganiz
 import { isValidPersonName, sanitizePersonName } from './utils/personName.js'
 import { getPurchaseStatusAfterReceipt, getPurchaseTransition, haveAllParticipantsPaid, normalizeQuantity } from './utils/purchaseWorkflow.js'
 import { sanitizeImageUrl } from './utils/safeUrl.js'
+import { getSynchronizedNow } from './utils/serverClock.js'
+import { localizeErrorMessage } from './utils/errorMessages.js'
 import {
   createCloudPurchase,
   calculatePurchaseDeliveryShares,
@@ -51,7 +53,6 @@ import './Features.css'
 
 const PURCHASE_STATUS_ALIASES = { 'Збір коштів': 'Збір учасників', 'В дорозі': 'Доставка' }
 const publicUser = ({ id, email, firstName, lastName, name, role }) => ({ id, email, firstName, lastName, name, role })
-const INITIAL_NOW = Date.now()
 const EMPTY_COURIER_WALLET = { payouts: [], totalPaid: 0 }
 const normalizeTheme = (value) => value === 'dark' ? 'dark' : 'light'
 const themeStorageKey = (userId) => userId ? `gb_theme_${userId}` : 'gb_theme_guest'
@@ -125,7 +126,7 @@ function normalizePurchases(value) {
       const parsedDeadline = Number(purchase.expiresAt ?? purchase.deadlineAt)
       const validDuration = [30, 10800, 86400, 259200, 604800, 1209600].includes(durationSeconds)
       const validDeadline = validDuration && Number.isFinite(parsedDeadline) && parsedDeadline > 0
-        && parsedDeadline <= Date.now() + durationSeconds * 1000 + 60000
+        && parsedDeadline <= getSynchronizedNow() + durationSeconds * 1000 + 60000
         ? parsedDeadline
         : 0
       const participantRecords = (Array.isArray(purchase.participants) ? purchase.participants.slice(0, 5000) : [])
@@ -224,15 +225,38 @@ function App() {
   const defaultPage = user?.role === 'organizer' ? 'manage' : user?.role === 'courier' ? 'logistics' : 'catalog'
   const [navigation, setNavigation] = useState(() => ({ userId: user?.id || null, page: defaultPage }))
   const activePage = navigation.userId === (user?.id || null) ? navigation.page : defaultPage
-  function setActivePage(page) {
+  function replaceRouteQuery({ purchaseId = '', checkoutId = '' } = {}) {
+    if (typeof window === 'undefined') return
+    const url = new URL(window.location.href)
+    url.searchParams.delete('purchase')
+    url.searchParams.delete('checkout')
+    if (purchaseId) url.searchParams.set('purchase', purchaseId)
+    if (checkoutId) url.searchParams.set('checkout', checkoutId)
+    window.history.replaceState({}, document.title, `${url.pathname}${url.search}${url.hash}`)
+  }
+
+  function setActivePage(page, context = {}) {
+    const purchaseId = context.purchaseId ?? selectedPurchaseId
+    const draft = context.checkoutDraft ?? checkoutDraft
     setNavigation({ userId: user?.id || null, page })
+    if (page === 'purchase') replaceRouteQuery({ purchaseId })
+    else if (page === 'checkout') replaceRouteQuery({ checkoutId: draft?.purchaseId || '' })
+    else replaceRouteQuery()
+  }
+  function checkoutContextKey(userId = user?.id) {
+    return userId ? `gb_checkout_context_${tabId}_${userId}` : ''
+  }
+  function clearCheckoutResume(userId = user?.id) {
+    const key = checkoutContextKey(userId)
+    if (!key) return
+    try { window.sessionStorage.removeItem(key) } catch { /* Session resume is optional if storage is blocked. */ }
   }
   const [selectedPurchaseId, setSelectedPurchaseId] = useState(null)
   const [checkoutDraft, setCheckoutDraft] = useState(null)
   const [checkoutSourcePage, setCheckoutSourcePage] = useState('purchase')
   const [activeOrderId, setActiveOrderId] = useState(null)
   const [toast, setToast] = useState(null)
-  const [now, setNow] = useState(INITIAL_NOW)
+  const [now, setNow] = useState(() => getSynchronizedNow())
 
   const userOrders = user?.role === 'participant' ? orders.filter((order) => order.userId === user.id) : []
   const ownedPurchases = user?.role === 'organizer' ? purchases.filter((purchase) => purchase.organizerId === user.id) : []
@@ -246,6 +270,43 @@ function App() {
     || [...userOrders].reverse().find((order) => !order.cancelled && order.status !== 'Отримано')
     || [...userOrders].reverse()[0]
     || null
+
+  const participantStatusSnapshot = useRef({ userId: null, statuses: new Map() })
+  useEffect(() => {
+    if (user?.role !== 'participant') {
+      participantStatusSnapshot.current = { userId: user?.id || null, statuses: new Map() }
+      return
+    }
+
+    const currentStatuses = new Map(userOrders.map((order) => [order.id, order.status]))
+    const previousSnapshot = participantStatusSnapshot.current
+    if (previousSnapshot.userId !== user.id) {
+      participantStatusSnapshot.current = { userId: user.id, statuses: currentStatuses }
+      return
+    }
+
+    const pickupStatuses = new Set(['Точка видачі', 'pickup'])
+    const newlyReady = userOrders.filter((order) => {
+      const previousStatus = previousSnapshot.statuses.get(order.id)
+      return previousStatus != null && !pickupStatuses.has(previousStatus) && pickupStatuses.has(order.status)
+    })
+    participantStatusSnapshot.current = { userId: user.id, statuses: currentStatuses }
+    if (!newlyReady.length) return
+
+    showToast('Ваше замовлення очікує на видачі')
+    for (const order of newlyReady) {
+      const purchase = purchases.find((entry) => entry.id === order.purchaseId)
+      if (typeof window !== 'undefined' && 'Notification' in window && window.Notification.permission === 'granted') {
+        try {
+          new window.Notification('Group Buying', {
+            body: purchase?.name ? `Ваше замовлення «${purchase.name}» очікує на видачі.` : 'Ваше замовлення очікує на видачі.',
+          })
+        } catch {
+          // Browser notifications are optional; the in-app toast remains available.
+        }
+      }
+    }
+  }, [user?.id, user?.role, userOrders, purchases])
 
   function showToast(message) {
     setToast({ id: resolveId('toast'), message })
@@ -295,23 +356,74 @@ function App() {
 
   useEffect(() => {
     if (sharedPurchaseHandled.current || !user || !cloudReady) return
-    const sharedPurchaseId = new URLSearchParams(window.location.search).get('purchase')
-    if (!sharedPurchaseId) {
+    const url = new URL(window.location.href)
+    const params = url.searchParams
+    const hasCheckout = params.has('checkout')
+    const hasPurchase = params.has('purchase')
+    if (!hasCheckout && !hasPurchase) {
       sharedPurchaseHandled.current = true
       return
     }
-    const sharedPurchase = purchases.find((purchase) => purchase.id === sharedPurchaseId)
-    if (!sharedPurchase) return
+    const clearRoute = () => {
+      params.delete('purchase')
+      params.delete('checkout')
+      window.history.replaceState({}, document.title, `${url.pathname}${url.search}${url.hash}`)
+    }
+
+    if (hasCheckout) {
+      const checkoutId = String(params.get('checkout') || '').trim()
+      let savedContext = null
+      try {
+        savedContext = JSON.parse(window.sessionStorage.getItem(`gb_checkout_context_${tabId}_${user.id}`) || 'null')
+      } catch {
+        savedContext = null
+      }
+      const purchase = purchases.find((entry) => entry.id === checkoutId)
+      const order = userOrders.find((entry) => entry.purchaseId === checkoutId && entry.userId === user.id)
+      const canResume = Boolean(checkoutId && user.role === 'participant' && purchase && order
+        && purchase.isDiscountFixed && getPurchasePricing(purchase).reached
+        && progressStep(order) === 2 && order.paymentStatus !== 'Оплачено' && !order.cancelled)
+      if (!canResume) {
+        sharedPurchaseHandled.current = true
+        clearRoute()
+        showToast('Оплату не вдалося відновити. Відкрийте замовлення та спробуйте ще раз.')
+        return
+      }
+      const share = deliverySharesForPurchase(purchase).get(user.id) ?? order.deliveryShare
+      const subtotal = safeNumber(order.quantity) * getPurchasePricing(purchase).unitPrice
+      const draft = {
+        purchaseId: purchase.id,
+        name: purchase.name,
+        supplier: purchase.supplier || '',
+        quantity: order.quantity,
+        unitPrice: getPurchasePricing(purchase).unitPrice,
+        subtotal,
+        deliveryShare: share,
+        total: subtotal + share,
+        pickupAddress: purchase.pickupAddress,
+        pickupHours: purchase.pickupHours || '09:00 – 21:00',
+      }
+      sharedPurchaseHandled.current = true
+      setSelectedPurchaseId(purchase.id)
+      setActiveOrderId(order.id)
+      setCheckoutDraft(draft)
+      setCheckoutSourcePage(savedContext?.sourcePage === 'purchase' ? 'purchase' : 'orders')
+      setNavigation({ userId: user.id, page: 'checkout' })
+      return
+    }
+
+    const sharedPurchaseId = String(params.get('purchase') || '').trim()
+    const sharedPurchase = sharedPurchaseId ? purchases.find((purchase) => purchase.id === sharedPurchaseId) : null
+    if (!sharedPurchase) {
+      sharedPurchaseHandled.current = true
+      clearRoute()
+      showToast('Закупівлю не знайдено')
+      return
+    }
     sharedPurchaseHandled.current = true
-    const cleanUrl = new URL(window.location.href)
-    cleanUrl.searchParams.delete('purchase')
-    window.history.replaceState({}, document.title, `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`)
-    const openSharedPurchase = window.setTimeout(() => {
-      setSelectedPurchaseId(sharedPurchase.id)
-      setNavigation({ userId: user.id, page: 'purchase' })
-    }, 0)
-    return () => window.clearTimeout(openSharedPurchase)
-  }, [user, cloudReady, purchases])
+    setSelectedPurchaseId(sharedPurchase.id)
+    setNavigation({ userId: user.id, page: 'purchase' })
+  }, [user, cloudReady, purchases, userOrders])
 
   useEffect(() => {
     if (!isCloudMode()) return undefined
@@ -331,7 +443,7 @@ function App() {
             setOrders(normalizeOrders(snapshot.orders))
             setCloudError('')
           })
-          .catch((error) => setCloudError(error.message || 'Не вдалося синхронізувати дані.'))
+          .catch((error) => setCloudError(localizeErrorMessage(error, 'Не вдалося синхронізувати дані.')))
           .finally(() => { refreshQueued = false })
       }, 0)
     }
@@ -360,7 +472,7 @@ function App() {
       })
       .catch((error) => {
         if (!active) return
-        setCloudError(error.message || 'Не вдалося під’єднатися до Supabase.')
+        setCloudError(localizeErrorMessage(error, 'Не вдалося під’єднатися до Supabase.'))
         setCloudReady(true)
       })
 
@@ -393,7 +505,7 @@ function App() {
   }, [refreshCloudData, setUsers, setSession, setPurchases, setOrders])
 
   useEffect(() => {
-    const interval = window.setInterval(() => setNow(Date.now()), 1000)
+    const interval = window.setInterval(() => setNow(getSynchronizedNow()), 1000)
     return () => window.clearInterval(interval)
   }, [])
 
@@ -412,7 +524,7 @@ function App() {
         expiryRequests.current.add(purchase.id)
         void performCloudAction('expire_purchase', { purchase_id: purchase.id })
           .then(() => refreshCloudData())
-          .catch((error) => showToast(error.message || 'Не вдалося скасувати закупівлю за таймером.'))
+          .catch((error) => showToast(localizeErrorMessage(error, 'Не вдалося скасувати закупівлю за таймером.')))
           .finally(() => expiryRequests.current.delete(purchase.id))
       })
       return
@@ -460,7 +572,7 @@ function App() {
         setUsers([result.user])
         setSession(nextSession)
         await refreshCloudData()
-        setActivePage(role === 'organizer' ? 'manage' : role === 'courier' ? 'logistics' : 'catalog')
+        setNavigation({ userId: result.user.id, page: role === 'organizer' ? 'manage' : role === 'courier' ? 'logistics' : 'catalog' })
         setCloudError('')
         return null
       }
@@ -482,10 +594,10 @@ function App() {
       writeStorage(STORAGE_KEYS.users, nextUsers)
       const nextSession = { id: newUser.id }
       setSession(nextSession)
-      setActivePage(role === 'organizer' ? 'manage' : role === 'courier' ? 'logistics' : 'catalog')
+      setNavigation({ userId: newUser.id, page: role === 'organizer' ? 'manage' : role === 'courier' ? 'logistics' : 'catalog' })
       return null
     } catch (error) {
-      return error instanceof Error ? error.message : 'Не вдалося створити акаунт.'
+      return localizeErrorMessage(error, 'Не вдалося створити акаунт.')
     }
   }
 
@@ -501,12 +613,12 @@ function App() {
         setUsers([found])
         setSession(nextSession)
         await refreshCloudData()
-        setActivePage(found.role === 'organizer' ? 'manage' : found.role === 'courier' ? 'logistics' : 'catalog')
+        setNavigation({ userId: found.id, page: found.role === 'organizer' ? 'manage' : found.role === 'courier' ? 'logistics' : 'catalog' })
         setRecoveryMode(false)
         setCloudError('')
         return null
       } catch (error) {
-        return error instanceof Error ? error.message : 'Перевірте електронну пошту та пароль.'
+        return localizeErrorMessage(error, 'Перевірте електронну пошту та пароль.')
       }
     }
     const registeredUsers = normalizeUsers(readStorage(STORAGE_KEYS.users, users))
@@ -515,7 +627,7 @@ function App() {
     setUsers(registeredUsers)
     const nextSession = { id: found.id }
     setSession(nextSession)
-    setActivePage(found.role === 'organizer' ? 'manage' : found.role === 'courier' ? 'logistics' : 'catalog')
+    setNavigation({ userId: found.id, page: found.role === 'organizer' ? 'manage' : found.role === 'courier' ? 'logistics' : 'catalog' })
     return null
   }
 
@@ -527,12 +639,13 @@ function App() {
       showToast('Пароль успішно оновлено')
       return null
     } catch (error) {
-      return error instanceof Error ? error.message : 'Не вдалося оновити пароль.'
+      return localizeErrorMessage(error, 'Не вдалося оновити пароль.')
     }
   }
 
   function signOut() {
-    if (isCloudMode()) void logoutCloudUser().catch((error) => showToast(error.message || 'Не вдалося вийти з акаунта.'))
+    if (isCloudMode()) void logoutCloudUser().catch((error) => showToast(localizeErrorMessage(error, 'Не вдалося вийти з акаунта.')))
+    clearCheckoutResume()
     setSession(null)
     setSelectedPurchaseId(null)
     setCheckoutDraft(null)
@@ -554,7 +667,7 @@ function App() {
 
   function openPurchase(id) {
     setSelectedPurchaseId(id)
-    setActivePage('purchase')
+    setActivePage('purchase', { purchaseId: id })
   }
 
   function deliverySharesForPurchase(purchase) {
@@ -624,7 +737,7 @@ function App() {
         setSelectedPurchaseId(purchaseId)
         showToast('Ви приєдналися до закупівлі. Замовлення з’явилося у вашому списку.')
       } catch (error) {
-        showToast(error.message || 'Не вдалося приєднатися до закупівлі.')
+        showToast(localizeErrorMessage(error, 'Не вдалося приєднатися до закупівлі.'))
       }
       return
     }
@@ -672,14 +785,14 @@ function App() {
     if (user?.role !== 'participant') return
     const purchase = purchases.find((item) => item.id === purchaseId)
     const currentOrder = orders.find((item) => item.purchaseId === purchaseId && item.userId === user.id)
-    if (getPurchaseTransition({ action: 'leave_purchase', role: user.role, userId: user.id, purchase, order: currentOrder }) !== 'Збір учасників') return
+    if (getPurchaseTransition({ action: 'leave_purchase', role: user.role, userId: user.id, purchase, order: currentOrder, now }) !== 'Збір учасників') return
     if (isCloudMode()) {
       try {
         await runCloudAction('leave_purchase', { purchase_id: purchaseId })
         setActiveOrderId(null)
         showToast('Ви вийшли зі збору. Вашу частку прибрано.')
       } catch (error) {
-        showToast(error.message || 'Не вдалося вийти зі збору.')
+        showToast(localizeErrorMessage(error, 'Не вдалося вийти зі збору.'))
       }
       return
     }
@@ -705,20 +818,35 @@ function App() {
       || !getPurchasePricing(purchase).reached) return
     const order = orders.find((item) => item.purchaseId === purchase.id && item.userId === user.id)
     if (!order || progressStep(order) !== 2 || order.paymentStatus === 'Оплачено' || order.cancelled) return
-    setCheckoutDraft({
+    const unitPrice = getPurchasePricing(purchase).unitPrice
+    const subtotal = safeNumber(order.quantity) * unitPrice
+    const deliveryShare = deliverySharesForPurchase(purchase).get(user.id) ?? order.deliveryShare
+    const draft = {
       purchaseId: purchase.id,
       name: purchase.name,
       supplier: purchase.supplier || '',
       quantity: order.quantity,
-      unitPrice: order.unitPrice,
-      subtotal: order.subtotal,
-      deliveryShare: order.deliveryShare,
-      total: order.total,
+      unitPrice,
+      subtotal,
+      deliveryShare,
+      total: subtotal + deliveryShare,
       pickupAddress: purchase.pickupAddress,
       pickupHours: purchase.pickupHours || '09:00 – 21:00',
-    })
+    }
+    setCheckoutDraft(draft)
     setCheckoutSourcePage(sourcePage)
-    setActivePage('checkout')
+    try {
+      window.sessionStorage.setItem(checkoutContextKey(), JSON.stringify({ purchaseId: purchase.id, sourcePage }))
+    } catch { /* The current checkout still works when session storage is blocked. */ }
+    setActivePage('checkout', { checkoutDraft: draft })
+  }
+
+  function returnFromCheckout() {
+    clearCheckoutResume()
+    const sourcePage = checkoutSourcePage
+    const purchaseId = checkoutDraft?.purchaseId
+    setCheckoutDraft(null)
+    setActivePage(sourcePage, { purchaseId })
   }
 
   async function completePayment(purchaseId) {
@@ -728,11 +856,12 @@ function App() {
         const { snapshot } = await runCloudAction('pay_order', { purchase_id: purchaseId })
         const paidOrder = snapshot.orders.find((item) => item.purchaseId === purchaseId && item.userId === user.id)
         setActiveOrderId(paidOrder?.id || null)
+        clearCheckoutResume()
         setCheckoutDraft(null)
         setActivePage('orders')
         showToast('Оплату прийнято. Кошти захищені до отримання товару.')
       } catch (error) {
-        showToast(error.message || 'Не вдалося прийняти оплату.')
+        showToast(localizeErrorMessage(error, 'Не вдалося прийняти оплату.'))
       }
       return
     }
@@ -749,7 +878,7 @@ function App() {
       statusBadge: STATUS_LABELS[1],
       paymentStatus: 'Оплачено',
       paidAt: time,
-      history: [...order.history, orderHistory('Оплата', `Учасник ${user.name} сплатив ${formatMoney(order.total)}. Кошти утримуються на гарантійному рахунку.`, time)],
+      history: [...order.history, orderHistory('Оплата', `Учасник ${user.name} сплатив ${formatMoney(checkoutDraft.total)}. Кошти утримуються на гарантійному рахунку.`, time)],
     }
     const updatedPurchase = {
       ...purchase,
@@ -758,6 +887,7 @@ function App() {
     setPurchases((items) => items.map((item) => item.id === purchaseId ? updatedPurchase : item))
     setOrders((items) => items.map((item) => item.id === order.id ? paidOrder : item))
     setActiveOrderId(paidOrder.id)
+    clearCheckoutResume()
     setCheckoutDraft(null)
     setActivePage('orders')
     showToast('Оплату прийнято. Кошти захищені до отримання товару.')
@@ -815,7 +945,7 @@ function App() {
         showToast(`Закупівлю «${purchase.name}» створено.`)
         return true
       } catch (error) {
-        showToast(error.message || 'Не вдалося створити закупівлю.')
+        showToast(localizeErrorMessage(error, 'Не вдалося створити закупівлю.'))
         return false
       }
     }
@@ -829,14 +959,14 @@ function App() {
   async function fixDiscount(purchaseId) {
     if (user?.role !== 'organizer') return false
     const purchase = purchases.find((item) => item.id === purchaseId)
-    if (getPurchaseTransition({ action: 'fix_discount', role: user.role, userId: user.id, purchase }) !== 'Оплата') return false
+    if (getPurchaseTransition({ action: 'fix_discount', role: user.role, userId: user.id, purchase, now }) !== 'Оплата') return false
     if (isCloudMode()) {
       try {
         await runCloudAction('fix_discount', { purchase_id: purchaseId })
         showToast('Гуртову знижку зафіксовано. Учасники можуть оплатити частки.')
         return true
       } catch (error) {
-        showToast(error.message || 'Не вдалося зафіксувати знижку.')
+        showToast(localizeErrorMessage(error, 'Не вдалося зафіксувати знижку.'))
         return false
       }
     }
@@ -875,7 +1005,7 @@ function App() {
     const hasPaidOrders = orders.some((order) => order.purchaseId === purchaseId
       && (order.paymentStatus === 'Оплачено' || order.status === 'Отримано'))
       || purchase?.participants?.some((participant) => ['Оплачено', 'Отримано'].includes(participant.payment))
-    if (getPurchaseTransition({ action: 'cancel_purchase', role: user.role, userId: user.id, purchase, hasPaidOrders }) !== 'Скасовано') {
+    if (getPurchaseTransition({ action: 'cancel_purchase', role: user.role, userId: user.id, purchase, hasPaidOrders, now }) !== 'Скасовано') {
       showToast('Цю закупівлю вже не можна скасувати на етапі збору.')
       return false
     }
@@ -886,7 +1016,7 @@ function App() {
         showToast('Закупівлю скасовано. Пов’язані неоплачені замовлення оновлено.')
         return true
       } catch (error) {
-        showToast(error.message || 'Не вдалося скасувати закупівлю.')
+        showToast(localizeErrorMessage(error, 'Не вдалося скасувати закупівлю.'))
         return false
       }
     }
@@ -921,7 +1051,7 @@ function App() {
       Точка_видачі: 'deliver_to_pickup',
       Отримано: 'confirm_receipt',
     }[newStatus.replaceAll(' ', '_')]
-    if (getPurchaseTransition({ action: transitionAction, role: user.role, userId: user.id, purchase: transitionPurchase, order: transitionOrder, allParticipantsPaid: transitionAllPaid }) !== newStatus) return false
+    if (getPurchaseTransition({ action: transitionAction, role: user.role, userId: user.id, purchase: transitionPurchase, order: transitionOrder, allParticipantsPaid: transitionAllPaid, now }) !== newStatus) return false
     if (isCloudMode()) {
       const actionByStatus = {
         Оформлення: 'form_batch',
@@ -936,7 +1066,7 @@ function App() {
         showToast(newStatus === 'Отримано' ? 'Замовлення отримано. Кошти з гарантійного рахунку перераховано організатору.' : 'Статус закупівлі оновлено.')
         return true
       } catch (error) {
-        showToast(error.message || 'Не вдалося оновити статус закупівлі.')
+        showToast(localizeErrorMessage(error, 'Не вдалося оновити статус закупівлі.'))
         return false
       }
     }
@@ -1050,7 +1180,7 @@ function App() {
       >
         {activePage === 'catalog' && <CatalogView purchases={purchases} now={now} userRole={user.role} userId={user.id} onOpenPurchase={openPurchase} onCreatePurchase={() => setActivePage('create')} />}
         {activePage === 'purchase' && <PurchaseDetailView key={selectedPurchaseId} purchase={activePurchase} now={now} theme={theme} userRole={user.role} userName={user.name} userId={user.id} hasOrder={userOrders.some((order) => order.purchaseId === selectedPurchaseId)} hasPaid={userOrders.some((order) => order.purchaseId === selectedPurchaseId && order.paymentStatus === 'Оплачено')} onBack={() => setActivePage('catalog')} onJoin={joinPurchase} onLeave={leavePurchase} onCheckout={(purchase) => startCheckout(purchase, 'purchase')} onManage={(id) => { setSelectedPurchaseId(id); setActivePage('manage') }} onShare={sharePurchase} />}
-        {activePage === 'checkout' && <CheckoutView draft={checkoutDraft} onBack={() => setActivePage(checkoutSourcePage)} onPay={completePayment} />}
+        {activePage === 'checkout' && <CheckoutView draft={checkoutDraft} onBack={returnFromCheckout} onPay={completePayment} />}
         {activePage === 'orders' && <OrdersView orders={userOrders.map((order) => { const purchase = purchases.find((item) => item.id === order.purchaseId); return { ...order, courierName: order.courierName || purchase?.courierName || '', pickupAddress: order.pickupAddress || purchase?.pickupAddress || '', pickupHours: order.pickupHours || purchase?.pickupHours || '09:00 – 21:00' } })} totalSavings={participantSavings} activeOrderId={activeOrder?.id || null} onSelectOrder={setActiveOrderId} onCheckout={(purchaseId) => { const purchase = purchases.find((item) => item.id === purchaseId); if (purchase) startCheckout(purchase, 'orders') }} onConfirmReceipt={(purchaseId) => updatePurchaseStatus(purchaseId, 'Отримано')} onNavigateToCatalog={() => setActivePage('catalog')} />}
         {activePage === 'create' && <CreatePurchaseView organizer={user.name} onCreate={createPurchase} />}
         {activePage === 'manage' && <ManagePurchaseView items={ownedPurchases} orders={orders} ownerId={user.id} ownerName={user.name} selectedId={selectedPurchaseId} now={now} onSelect={setSelectedPurchaseId} onCreateNew={() => setActivePage('create')} onFixDiscount={fixDiscount} onCancelPurchase={cancelPurchase} onUpdatePurchaseStatus={updatePurchaseStatus} />}

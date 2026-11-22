@@ -4951,3 +4951,67 @@ body,
   .app-shell .search-box.has-query input { padding-right: 40px; }
   .app-shell .payment-input-wrap input.card-number-input { padding-left: 36px; }
 }
+
+/* Mobile participant table becomes a card grid instead of forcing horizontal scrolling. */
+@media (max-width: 640px) {
+  .app-shell .participant-table-wrap {
+    max-width: 100%;
+    overflow: visible;
+  }
+
+  .app-shell .participant-table {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    white-space: normal;
+  }
+
+  .app-shell .participant-table thead { display: none; }
+  .app-shell .participant-table tbody,
+  .app-shell .participant-table tfoot { display: block; width: 100%; }
+
+  .app-shell .participant-table tbody tr,
+  .app-shell .participant-table tfoot tr {
+    display: grid;
+    width: 100%;
+    min-width: 0;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin-top: 10px;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: var(--card);
+  }
+
+  .app-shell .participant-table td,
+  .app-shell .participant-table tfoot td {
+    display: block;
+    min-width: 0;
+    padding: 0;
+    overflow-wrap: anywhere;
+    white-space: normal;
+    font-size: 13px;
+  }
+
+  .app-shell .participant-table tbody td::before,
+  .app-shell .participant-table tfoot td::before {
+    display: block;
+    margin-bottom: 2px;
+    color: var(--muted);
+    content: attr(data-label);
+    font-size: 11px;
+    font-weight: 700;
+  }
+
+  .app-shell .participant-table tbody td:first-child,
+  .app-shell .participant-table tfoot td:first-child { grid-column: 1 / -1; }
+  .app-shell .participant-table tbody td:first-child::before { display: none; }
+  .app-shell .participant-table tbody td:first-child { min-width: 0; }
+  .app-shell .participant-table .manage-participant-contact { min-width: 0; }
+}
+
+/* WCAG AA contrast for inactive order-tracker steps in both themes. */
+.app-shell .status-step:not(.current):not(.complete) .status-step-label {
+  color: var(--tracker-inactive);
+}

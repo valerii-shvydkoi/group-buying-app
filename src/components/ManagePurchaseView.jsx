@@ -169,21 +169,21 @@ export default function ManagePurchaseView({ items = [], orders = [], ownerId = 
                       const contactIsActive = !['Завершено', 'Скасовано', 'Отримано', 'received', 'cancelled'].includes(purchase.status)
                         && !['Отримано', 'Скасовано', 'received', 'cancelled'].includes(person.payment)
                       return <tr key={person.id}>
-                        <td>
+                        <td data-label="Учасник">
                           <strong className="break-words" title={person.name}>{person.name}</strong>
                           {validEmail && <div className="manage-participant-contact w-full flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mt-1.5">
                             <span className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 break-all" title={email}>{email}</span>
                             {contactIsActive && <CopyButton text={email} label="Копіювати email" />}
                           </div>}
                         </td>
-                        <td>{person.quantity}</td>
-                        <td>{formatMoney(participantSubtotal(person))}</td>
-                        <td>{formatMoney(participantDelivery(person))}</td>
-                        <td><span className={`payment-status ${person.payment === 'Отримано' ? 'received' : ''}`}>{person.payment || 'Очікує'}</span></td>
+                        <td data-label="К-сть">{person.quantity}</td>
+                        <td data-label="Сума">{formatMoney(participantSubtotal(person))}</td>
+                        <td data-label="Доставка">{formatMoney(participantDelivery(person))}</td>
+                        <td data-label="Оплата"><span className={`payment-status ${person.payment === 'Отримано' ? 'received' : ''}`}>{person.payment || 'Очікує'}</span></td>
                       </tr>
                     })}
                   </tbody>
-                  <tfoot><tr><td>Разом</td><td>{participants.reduce((total, person) => total + safeNumber(person.quantity), 0)}</td><td>{formatMoney(totalParticipantAmount)}</td><td>{formatMoney(totalParticipantDelivery)}</td><td>{completed ? 'Отримано' : reached ? 'Поріг 100%' : targetReached ? 'Очікуємо учасника' : `${percentage}%`}</td></tr></tfoot>
+                  <tfoot><tr><td data-label="Підсумок">Разом</td><td data-label="К-сть">{participants.reduce((total, person) => total + safeNumber(person.quantity), 0)}</td><td data-label="Сума">{formatMoney(totalParticipantAmount)}</td><td data-label="Доставка">{formatMoney(totalParticipantDelivery)}</td><td data-label="Статус">{completed ? 'Отримано' : reached ? 'Поріг 100%' : targetReached ? 'Очікуємо учасника' : `${percentage}%`}</td></tr></tfoot>
                 </table>
               </div>
               {matchingParticipants.length > 4 && !participantSearch.trim() && <button className="participant-list-toggle" type="button" onClick={toggleParticipantList}>

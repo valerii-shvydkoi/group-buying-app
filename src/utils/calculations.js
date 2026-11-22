@@ -21,9 +21,8 @@ export function getUniqueParticipantCount(participants) {
   return identities.size
 }
 
-export function calculateDeliveryShare(deliveryTotal, subtotal, threshold, collected = 0) {
-  const safeThreshold = boundedNumber(threshold, MAX_COLLECTION)
-  const baseAmount = Math.max(boundedNumber(collected, MAX_COLLECTION), safeThreshold)
+export function calculateDeliveryShare(deliveryTotal, subtotal, _threshold, collected = 0) {
+  const baseAmount = boundedNumber(collected, MAX_COLLECTION)
   if (baseAmount <= 0) return 0
   const delivery = boundedNumber(deliveryTotal, MAX_DELIVERY_TOTAL)
   const share = Math.round(delivery * (boundedNumber(subtotal, MAX_ORDER_SUBTOTAL) / baseAmount))
@@ -48,7 +47,9 @@ export function getPurchasePricing(purchase = {}) {
   const thresholdAtCurrentPrice = reached && retailPrice > 0
     ? threshold * (wholesalePrice / retailPrice)
     : threshold
-  const deliveryBase = Math.max(totalCollected, thresholdAtCurrentPrice)
+  // Allocate delivery over the actual baskets at the active price. Using the
+  // target here overcharges early participants and makes preview totals drift.
+  const deliveryBase = totalCollected
 
   return { reached, targetReached, participantCount, unitPrice, totalCollected, thresholdAtCurrentPrice, deliveryBase }
 }
@@ -77,10 +78,7 @@ export function calculatePurchaseDeliveryShares(purchase = {}, participants = []
   })
 
   const allocatedSubtotal = allocations.reduce((total, entry) => total + entry.subtotal, 0)
-  const hasReachedCurrentPriceThreshold = pricing.reached
-    && pricing.totalCollected >= pricing.thresholdAtCurrentPrice
-    && allocatedSubtotal > 0
-  if (hasReachedCurrentPriceThreshold && allocations.length) {
+  if (allocatedSubtotal > 0 && allocations.length) {
     let remainder = deliveryTotal - allocations.reduce((total, entry) => total + entry.deliveryShare, 0)
     const largestFirst = allocations
       .map((entry, index) => ({ entry, index }))

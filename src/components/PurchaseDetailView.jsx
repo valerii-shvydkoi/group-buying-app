@@ -156,6 +156,7 @@ export default function PurchaseDetailView({
             key={`${purchase.id}-${participant?.quantity ?? 1}`}
             purchase={purchase}
             initialQuantity={participant?.quantity ?? 1}
+            userId={userId}
             hasJoined={Boolean(participant)}
             hasOrder={hasOrder}
             hasPaid={hasPaid}

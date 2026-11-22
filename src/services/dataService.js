@@ -8,6 +8,8 @@ import { isValidEmail, isValidPassword } from '../utils/validation.js'
 import { getPaymentCardBrand } from '../utils/paymentCard.js'
 import { calculateConfirmedCourierPayouts, calculateCourierFinanceSummary } from '../utils/courierWallet.js'
 import { isValidUkrainianIban, normalizeUkrainianIban } from '../utils/iban.js'
+import { recordServerTimeSample } from '../utils/serverClock.js'
+import { localizeErrorMessage } from '../utils/errorMessages.js'
 
 export { calculatePurchaseDeliveryShares } from '../utils/calculations.js'
 
@@ -23,6 +25,17 @@ const COURIER_PAYOUTS_CHANGED_EVENT = 'gb-courier-payouts-changed'
 const COURIER_CARDS_CHANGED_EVENT = 'gb-courier-cards-changed'
 const COURIER_IBANS_CHANGED_EVENT = 'gb-courier-ibans-changed'
 let passwordRecoveryRedirectPending = false
+
+async function fetchWithServerClock(...args) {
+  const requestStartedAt = Date.now()
+  const requestStartedMonotonic = globalThis.performance?.now?.()
+  const response = await globalThis.fetch(...args)
+  const responseReceivedAt = Date.now()
+  const responseReceivedMonotonic = globalThis.performance?.now?.()
+  const serverDate = response.headers?.get?.('date')
+  if (serverDate) recordServerTimeSample(serverDate, requestStartedAt, responseReceivedAt, requestStartedMonotonic, responseReceivedMonotonic)
+  return response
+}
 
 function validateAuthInput({ firstName, lastName, email, role, password }) {
   const normalizedEmail = String(email || '').trim()
@@ -80,6 +93,7 @@ function clearTabAuthSession() {
 
 export const supabase = cloudConfigured
   ? createClient(supabaseUrl, supabasePublicKey, {
+      global: { fetch: fetchWithServerClock },
       auth: {
         autoRefreshToken: true,
         detectSessionInUrl: false,
@@ -119,7 +133,7 @@ export function formatCourierStatusHistoryMessage(status, courierName, pickupAdd
 }
 
 function throwIfError(error) {
-  if (error) throw new Error(error.message || 'Помилка з’єднання з базою даних.')
+  if (error) throw new Error(localizeErrorMessage(error, 'Помилка під час обміну даними із сервером.'))
 }
 
 function isMissingPayoutMetadataSchema(error) {
